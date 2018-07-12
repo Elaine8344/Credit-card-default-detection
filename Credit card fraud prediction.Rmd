@@ -1,0 +1,255 @@
+---
+title: "Credit Card fraud prediction"
+output:
+  html_document:
+    df_print: paged
+---
+
+Author: Lin Ye                                                                                        
+Date:  `r format(Sys.time(), '%B %d, %Y')`
+
+
+```{r message=FALSE, warning=FALSE}
+# Clear working environment
+rm(list=ls(all=TRUE)) 
+
+#INSTALL THE PACKAGES used in this file
+library(ggplot2)
+library(dplyr)
+library(caret)
+library(class)
+library(MASS)
+library(ROCR)
+```
+
+Load data into R
+=========================================
+```{r}
+dat_orig <- read.csv("creditcard.csv")
+# convert data to data frame
+#dat_orig <- as.data.frame(dat_orig)
+```
+
+Checking data Statistical character
+============================================
+```{r include=FALSE}
+summary(dat_orig)
+str(dat_orig)
+```
+
+Exploring data analysis
+==============================================
+
+```{r}
+which(is.na(dat_orig)) # Checking the missing value
+prop.table(table(dat_orig$Class)) # Checking the value of Class variable 
+table(dat_orig$Class)
+```
+
+####Recreate data set sample
+
+
+```{r}
+### Creat a new conlmn Time_hour to convert Time by second to Time by hour
+dat_orig$Time_Hour <- round(dat_orig$Time/3600, 0)
+dat_orig <- dat_orig[, -1]
+```
+
+####Finding out what is the distributin of credit card fraud happening with hours during these two days
+```{r}
+dat_orig$Time_Hour <- as.factor(dat_orig$Time_Hour)  # Convert continuous variable to factor
+dat_fraud <- dat_orig[dat_orig$Class == '1',]        # Subset data with fraud happening
+
+dat_1 <- dat_fraud %>%                     # Calculate the number of fraud by hour
+        group_by(Time_Hour)%>%
+        summarise(count = n())%>%
+        mutate(col = ifelse(count >= 20, 'High', 'N'))
+
+ggplot(dat_1, aes(x = Time_Hour, y = count, fill = col) ) + 
+  geom_bar( stat = 'identity') +           
+  labs(x = 'Time (Hour)', y = 'Fraud Count') +
+  scale_fill_manual( values = c('tomato', 'light blue'), guide = FALSE ) +
+  theme_minimal() +
+  theme(legend.position = 'none') +
+  ggtitle("The highest fraud happened at 2:00AM both days and 11:00AM on first day") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.title = element_text(size = 13, face = "bold"))
+ 
+```
+
+####Finding out how is the average credit card fraud amount by hour during these two days
+
+```{r}
+dat_2 <- dat_fraud %>%                     # Calculate average fraud amount by hour
+        group_by(Time_Hour) %>%
+        summarise(amount_avg = mean(Amount))%>%
+        mutate(col = ifelse(amount_avg >= 300, "high", "N"))
+
+ggplot(dat_2, aes(x = Time_Hour, y = amount_avg, fill = col) ) + 
+  geom_bar(stat = 'identity') + 
+  labs(x ='Time (Hour)', y = 'Average Fraud Amount') +
+  scale_fill_manual( values = c('tomato', 'light blue'), guide = FALSE ) +
+  theme_minimal() +
+  theme(legend.position = 'none') +
+  ggtitle("The highest average fraud amount happened at noon second day") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+  
+```
+
+
+
+####Finding out how is the credit card fraud amount by hour during these two days
+
+```{r}
+dat_3 <- dat_fraud %>%                     # Calculate the fraud amount by hour
+        group_by(Time_Hour) %>%
+        summarise(amount_tol = sum(Amount)) 
+
+ggplot(dat_3, aes(x = Time_Hour, y = amount_tol) ) + 
+  geom_point(aes(size = amount_tol), shape = 21, fill = 'yellow') + 
+  labs(x ='Time (Hour)', y = 'Total Fraud Amount') +
+  theme_minimal() +
+  theme(legend.position = 'none') +
+  ggtitle("Total fraud amount by hour") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.title = element_text(size = 20, face = "bold"))
+  
+```
+
+Data preparing for modeling
+==============================
+
+```{r}
+####Recreate data sample since this is an unbalance data set. For Class variable, there is only 492 observations are class 1 in 284315 observations. 
+dat_orig$Class <- factor(dat_orig$Class)              # Convert to factor
+dat_orig_1 <- dat_orig[dat_orig$Class == '1', ]       # Subset data where Class is 1
+dat_orig_0 <- dat_orig[dat_orig$Class == '0', ]       # Subset data where Class is 0
+
+set.seed(1234) 
+index1 <- sample(x = 1:nrow(dat_orig_0), size = 4*nrow(dat_orig_1)) # Set an index with the size is 4 times of dat_orig_1 size.
+dat_orig_0New <- dat_orig_0[index1, ]   # Subset new sample of class = 0  
+dat_orig_1New <- rbind(dat_orig_1, dat_orig_1) 
+dat_orig_1New <- rbind(dat_orig_1New, dat_orig_1New) # Row bind data subset of class = 1 to make it 4 times size
+
+dat <- rbind(dat_orig_0New, dat_orig_1New) # Create new data set to do analysis
+
+```
+
+```{r}
+#### Standadize data
+dat_stan <- preProcess(dat, method = 'range')
+dat_s <- predict(dat_stan, dat)
+```
+
+Modeling
+==============================
+
+```{r}
+#sampling data
+set.seed(1234)
+dat_s$Time_Hour<-as.numeric(dat_s$Time_Hour)
+index2 <- createDataPartition(dat_s$Class, p = 0.8, list = F)
+dat_train <- dat_s[index2, ] 
+dat_test <- dat_s[-index2, ] 
+```
+
+Method 1: Logistics regression 
+=============================
+```{r}
+#Original model using logistics regression 
+mod1 <- glm(Class~., dat_train, family=binomial)
+summary(mod1)
+```
+
+```{r}
+#set up step.model 
+step.model <- mod1 %>% stepAIC(trace = FALSE)  #forward(stepwise) selection 
+coef(step.model) #get coefficients 
+```
+
+```{r}
+# Make predictions
+probabilities <- mod1 %>% predict(dat_test, type = "response")
+predicted.classes <- ifelse(probabilities > 0.5, 1, 0)
+# Prediction accuracy
+observed.classes <- dat_test$Class
+mean(predicted.classes == observed.classes)
+
+# Make predictions
+probabilities <- step.model  %>% predict(dat_test, type = "response")
+predicted.classes <- ifelse(probabilities > 0.5, 1, 0)
+# Prediction accuracy
+observed.classes <- dat_test$Class
+mean(predicted.classes == observed.classes)
+coef(step.model)
+
+summary(step.model)
+```
+
+```{r}
+#plot ROC 
+pred=prediction(predicted.classes,dat_test$Class)
+
+performance(pred,'auc')@y.values
+
+perf=performance(pred,'tpr','fpr')
+
+plot(perf)
+```
+
+Model 2: Knn 
+====================
+```{r}
+results = c()   #create a vector      
+for(i in 3:10) {    #run the knn from equals 3 to 10 
+  set.seed(1234)
+  pred_knn <- knn(dat_train[-30], dat_test[-30], dat_train$Class, i)
+  Table <- table(pred_knn, dat_test$Class)  #get confusion matrix
+  accuracy <- sum(diag(Table))/sum(Table) 
+  results <- c(results, accuracy)
+}
+
+#plot to find out the K values with highest model accuracy 
+plot(x = 3:10, y = results, type = 'b', col = 'blue', xlab = 'k', ylab = 'accuracy')
+#It has highest accuracy when K equals to 3
+
+#choose when k = 3 to build the model 
+set.seed(1234)
+pred_knn <- knn(train = dat_train[-30], test = dat_test[-30], 
+                cl = dat_train$Class, k = 3)
+
+confusionMatrix(pred_knn, dat_test$Class, positive = '1')
+
+         
+```
+
+
+Method 3: Random Forest 
+====================
+```{r}
+set.seed(1234)
+# run random forest model, using 5-fold cross validation and repeat 5 times
+random_forest <- train(Class ~., data = dat_train, method = 'rf',
+                  trControl = trainControl(method = 'repeatedcv', 
+                                           number = 5, 
+                                           repeats=5,
+                                           selectionFunction = 'oneSE'))
+# get the model result
+random_forest
+# plot the model, mtry =2 gets the best accuracy
+plot(random_forest)
+#make prediction using test data information 
+pred_random_forest <- predict(random_forest, dat_test[-30])
+#compare prediction with test data 
+confusionMatrix(data = pred_random_forest, reference = dat_test$Class,positive = '1')
+```
+
+```{r}
+# list variables based on importance of each variable
+varImp(random_forest)
+plot(varImp(random_forest)) 
+```
+
+
+
